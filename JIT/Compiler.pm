@@ -152,7 +152,7 @@ sub _output_template {
     if $offset > $self->{max_depth};
   
   my (@code, @top, %vars, @pool, %blocks, $type, $name, $var, 
-      $do_escape);
+      $do_escape, $has_default);
   
   # setup some convenience aliases ala HTML::Template::output()
   use vars qw($line  @parse_stack  %param_map); 
@@ -201,12 +201,16 @@ sub _output_template {
       }
 
       # append the var
-      push @code, ($self->{print_to_stdout} ? _print_var($var,  $do_escape) : 
-                                              _concat_var($var, $do_escape));
+      push @code, ($self->{print_to_stdout} ? _print_var($var,  $do_escape, $has_default) : 
+                                              _concat_var($var, $do_escape, $has_default));
 
-      # reset escape flag
-      $do_escape = "";
-      
+      # reset flags
+      undef $do_escape;
+      undef $has_default;
+
+    } elsif ($type eq 'HTML::Template::DEFAULT') {
+      $has_default = $$line;
+
     } elsif ($type eq 'HTML::Template::LOOP') {
       # get loop template
       my $loop_template = $line->[HTML::Template::LOOP::TEMPLATE_HASH]{$x};
@@ -344,6 +348,7 @@ END
       }
 
       hv_store(param_map[$loop_offset], "__odd__", 7, (($odd = !$odd) ? &PL_sv_yes : &PL_sv_no), 0);
+      hv_store(param_map[$loop_offset], "__counter__", 11, newSViv($counter + 1), 0);
 END
 
   }
@@ -449,9 +454,9 @@ sub _escape_var {
   
   # apply escaping to a mortal copy in temp_sv
   my @code = (<<END);
-SvPV_force($var, len);
-temp_sv = sv_mortalcopy($var);
-if (temp_sv != &PL_sv_undef) {
+if ($var != &PL_sv_undef) {
+  SvPV_force($var, len);
+  temp_sv = sv_mortalcopy($var);
   len = 0;
   while (len < SvCUR(temp_sv)) {
     c = *(SvPVX(temp_sv) + len);
@@ -507,14 +512,16 @@ END
 
 # concatenate a var onto result
 sub _concat_var {
-  $_[0] = "temp_sv" if $_[1];
-  return "if ($_[0] != &PL_sv_undef) sv_catsv(result, $_[0]);";  
+  return "if ($_[0] != &PL_sv_undef) sv_catsv(result, " . 
+    ($_[1] ? "temp_sv" : $_[0]) . ");" .
+        (defined $_[2] ? " else " . _concat_string($_[2]) : "");
 }
 
 # print a var to stdout
 sub _print_var {
-  $_[0] = "temp_sv" if $_[1];
-  return "if ($_[0] != &PL_sv_undef) PerlIO_stdoutf(SvPV_nolen($_[0]));";
+  return "if ($_[0] != &PL_sv_undef) PerlIO_stdoutf(SvPV_nolen(" .
+    ($_[1] ? "temp_sv" : $_[0]) . "));" .
+      (defined $_[2] ? " else " . _print_string($_[2]) : "");
 }
 
 # turn a string into something that C will accept inside

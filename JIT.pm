@@ -4,7 +4,7 @@ use 5.006;
 use strict;
 use warnings;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Carp qw(croak);
 use File::Spec;
@@ -36,9 +36,10 @@ sub new {
     unless $path;
 
   # setup options we care about
-  $args{global_vars}     ||= 0;
-  $args{print_to_stdout} ||= 0;
-  $args{case_sensitive}  ||= 0;
+  $args{global_vars}       ||= 0;
+  $args{print_to_stdout}   ||= 0;
+  $args{case_sensitive}    ||= 0;
+  $args{loop_context_vars} ||= 0;
 
   # get a hash of the path and mtime.  hashing them together means
   # that everytime the template file is changed we'll get a new md5
@@ -46,6 +47,7 @@ sub new {
   my $path_md5     = md5_hex($path . (stat($path))[9] . $VERSION .
                              join(' ', $args{global_vars},
                                        $args{print_to_stdout},
+                                       $args{loop_context_vars},
                                        $args{case_sensitive}));
   
   # compute package and filesystem details
@@ -262,10 +264,12 @@ limitations.
 
 =head1 BUGS
 
-When you find a bug, join the mailing list and tell us about it
-(htmltmpl@lists.vm.com).  You can join the HTML::Template mailing-list
-by sending a blank email to htmltmpl-subscribe@lists.vm.com.  Of
-course, you can still email me directly (sam@tregar.com) with bugs,
+When you find a bug join the mailing list and tell us about it.  You
+can join the HTML::Template mailing-list by visiting:
+
+  http://lists.sourceforge.net/lists/listinfo/html-template-users
+
+Of course, you can still email me directly (sam@tregar.com) with bugs,
 but I reserve the right to forward bug reports to the mailing list.
 
 When submitting bug reports, be sure to include full details,

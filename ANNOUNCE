@@ -1,33 +1,16 @@
 ANNOUNCEMENT: HTML::Template::JIT 0.03
 
-HTML::Template::JIT - a just-in-time compiler for HTML::Template
-
 CHANGES
 
-- Added support for case_sensitive option to new().
+- Added support for HTML::Template 2.6's new DEFAULT attribute.
 
-- Added new print_to_stdout option to new() to have output
-  printed to STDOUT as it is generated.
- 
-- Added support for ESCAPE.  Template syntax support is now
-  complete
+- Added support for HTML::Template 2.6's new __counter__ variable.
 
-- Improved the quality of generated code - variables are now
-  looked-up once and stored in lexical variables.  This has
-  improved performance a small amount.
+- Updated mailing-list information to reflect move from vm.com
+  to sourceforge.net
 
-- Fixed bug in escaping of template text.  This caused templates
-  containing the characters any of ($, @, %, \) to be rendered
-  incorrectly.  Thanks to Smejkal Petr for the report.
-
-- Fixed bug where parameters from previous runs were persisting
-  across calls to new().  Thanks to Tugrul Galatali for the spot.
-
-- Arguments to new() that modify the compiled object are now
-  included in hashing to create package names.  This means that
-  a single template can be used with different options and
-  different compiled objects will be generated.  Thanks to
-  Tugrul Galatali for the spot.
+- Fixed bug where tmpl_var's with the escape attribute would
+  cause a crash if not set with a value.
 
 
 DESCRIPTION
@@ -50,7 +33,7 @@ AVAILABILITY
 
 This module is available on SourceForge.  Download it at:
 
-  http://prdownloads.sourceforge.net/html-template/HTML-Template-JIT-0.02.tar.gz
+  http://prdownloads.sf.net/html-template/HTML-Template-JIT-0.03.tar.gz?download
 
 The module is also available on CPAN.  You can get it using CPAN.pm or
 go to:
@@ -60,5 +43,8 @@ go to:
 
 CONTACT INFO
 
-You can join the HTML::Template mailing-list by sending a blank
-message to htmltmpl-subscribe@lists.vm.com.
+This module was written by Sam Tregar (sam@tregar.com). You can
+join the HTML::Template mailing-list by visiting:
+
+  http://lists.sourceforge.net/lists/listinfo/html-template-users
+

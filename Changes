@@ -32,3 +32,14 @@
 
       - Added support for ESCAPE.  Template syntax support is now
         complete.
+
+0.04 Thu Aug 29 12:00:00 2002
+      - Added support for HTML::Template 2.6's new DEFAULT attribute.
+
+      - Added support for HTML::Template 2.6's new __counter__ variable.
+
+      - Updated mailing-list information to reflect move from vm.com
+        to sourceforge.net
+
+      - Fixed bug where tmpl_var's with the escape attribute would
+        cause a crash if not set with a value.
