@@ -1,4 +1,4 @@
-use Test::More tests => 6;
+use Test::More tests => 8;
 use HTML::Template::JIT;
 
 my $debug = 0;
@@ -48,4 +48,24 @@ like($output, qr/OUTER: 10/);
 like($output, qr/OUTER: 1/);
 like($output, qr/INNER: 10/);
 like($output, qr/INNER: 1/);
+
+# test a template using loop_context_vars
+$template = HTML::Template::JIT->new(
+				     filename => 't/templates/context.tmpl',
+				     loop_context_vars => 1,
+				     jit_path => 't/jit_path',
+				     jit_debug => $debug,
+				    );
+$template->param(FRUIT => [
+                           {KIND => 'Apples'},
+                           {KIND => 'Oranges'},
+                           {KIND => 'Brains'},
+                           {KIND => 'Toes'},
+                           {KIND => 'Kiwi'}
+                          ]);
+$template->param(PINGPONG => [ {}, {}, {}, {}, {}, {} ]);
+
+$output =  $template->output;
+like($output, qr/Apples, Oranges, Brains, Toes, and Kiwi./);
+like($output, qr/pingpongpingpongpingpong/);
 

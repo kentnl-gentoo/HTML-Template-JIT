@@ -4,7 +4,7 @@ use 5.006;
 use strict;
 use warnings;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use Carp qw(croak);
 use File::Spec;
@@ -166,7 +166,7 @@ might take several of seconds to compile a large template.
 
 The resulting compiled template is much faster than a normal cached
 template.  My benchmarks show HTML::Template::JIT, with a precompiled
-template, performing up to 4 times faster than HTML::Template with in
+template, performing 4 to 8 times faster than HTML::Template with in
 cache mode.
 
 =item *
@@ -213,8 +213,6 @@ This version is rather limited.  It doesn't support the following options:
    cache (all modes)
    associate
    case_sensitive
-   loop_context_vars
-   global_vars
    print_to
    scalarref (and friends)
    arrayref  (and friends)

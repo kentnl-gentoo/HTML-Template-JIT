@@ -18,13 +18,17 @@ sub compile {
   $self->{template} = HTML::Template->new(%args);
   
   # setup state
-  $self->{jit_path}     = $args{jit_path};
-  $self->{package}      = $args{package};
-  $self->{package_dir}  = $args{package_dir};
-  $self->{package_path} = $args{package_path};
-  $self->{jit_pool}     = [];
-  $self->{jit_sym}      = 0;
-  $self->{jit_debug}    = $args{jit_debug};
+  $self->{jit_path}          = $args{jit_path};
+  $self->{package}           = $args{package};
+  $self->{package_dir}       = $args{package_dir};
+  $self->{package_path}      = $args{package_path};
+  $self->{jit_pool}          = [];
+  $self->{jit_sym}           = 0;
+  $self->{jit_debug}         = $args{jit_debug};
+  $self->{text_size}         = 0;
+  $self->{loop_context_vars} = $args{loop_context_vars};
+  $self->{max_depth}         = 0;
+  $self->{global_vars}       = $args{global_vars};
 
   # compile internal representation into a chunk of C code
   my @code = $self->_output();
@@ -56,8 +60,7 @@ sub compile {
 
 # writes out the module file
 sub _write_module {
-  my $self = shift;
-  my $code = shift;
+  my ($self, $code) = @_;
 
   # make directory
   mkpath($self->{package_dir}, 0, 0700);
@@ -103,22 +106,24 @@ sub _output {
   my $template = $self->{template};
 
   # construct body of output
-  my @code = $self->_output_template($template, "param_map");
+  my @code = $self->_output_template($template, 0);
   
   # setup result size based on gathered stats
-  unshift @code, "SvGROW(result, $self->{text_size});";
-
+  unshift @code, "SvGROW(result, $self->{text_size});",
+                 "param_map[0] = get_hv(\"$self->{package}::param_map\", 0);";
+  
   # output pool of variables used in body
   unshift @code, $self->_write_pool, '';
+
+  # setup global counter
+  unshift @code, "int gcounter;";
 
   # start code for output function  
   unshift @code, <<END;
 SV * output(SV *self) { 
   SV *result = newSVpvn("", 0);
-  HV *param_map = get_hv(\"$self->{package}::param_map\", 0);
-  SV *temp_sv;
+  HV *param_map[($self->{max_depth} + 1)];
   SV **temp_svp;
-
 END
 
   # finish output function
@@ -129,34 +134,31 @@ END
 
 # output the body of a single template
 sub _output_template {
-  my $self = shift;
-  my $template = shift;
-  my $param_map_hv = shift;
-
+  my ($self, $template, $offset) = @_;
+  $self->{max_depth} = $offset 
+    if $offset > $self->{max_depth};
+  
   my @code;
-
+  
   # setup some convenience aliases ala HTML::Template::output()
   use vars qw($line  @parse_stack  %param_map); 
   local      (*line, *parse_stack, *param_map);
   *parse_stack = $template->{parse_stack};
   *param_map   = $template->{param_map};
-
+  
   my %reverse_param_map = map { $param_map{$_} => $_ } keys %param_map;
 
   my $type;
   my $parse_stack_length = $#parse_stack;
-  my $text_size = 0;
   
-  my %labels;
+  my %blocks;
 
   for (my $x = 0; $x <= $parse_stack_length; $x++) {
     *line = \$parse_stack[$x];
     $type = ref($line);
     
-    # need a jump label for this line?
-    if ($labels{$x}) {
-      push(@code, "$labels{$x}:");
-    }
+    # need any block closings on this line?
+    push(@code, "}" x $blocks{$x}) if $blocks{$x};
 
     if ($type eq 'SCALAR') {
       # append string and add size to text_size counter
@@ -165,40 +167,44 @@ sub _output_template {
 
     } elsif ($type eq 'HTML::Template::VAR') {
       # append the var
-      push @code, _concat_var($reverse_param_map{$line}, $param_map_hv);
+      push @code, _concat_var($reverse_param_map{$line}, $offset, $self->{global_vars});
       
     } elsif ($type eq 'HTML::Template::LOOP') {
       # get loop template
       my $loop_template = $line->[HTML::Template::LOOP::TEMPLATE_HASH]{$x};
 
       # allocate an hv for the loop param_map
-      my $loop_param_map_hv = $self->_get_var("HV *");
+      my $loop_offset = $offset + 1;
+
+      # remember text_size before loop
+      my $old_text_size = $self->{text_size};
 
       # output the loop start
-      push @code, $self->_start_loop($reverse_param_map{$line}, $param_map_hv, 
-				     $loop_param_map_hv);
+      push @code, $self->_start_loop($reverse_param_map{$line}, $offset, 
+				     $loop_offset);
 
       # output the loop body
-      push @code, $self->_output_template($loop_template, $loop_param_map_hv);
+      push @code, $self->_output_template($loop_template, $loop_offset);
       
       # send the loop
       push @code, $self->_end_loop();
 
+      # guesstimate average loop run of 10 and pre-allocate space for
+      # text accordingly.  This is a bit silly but something has to be
+      # done to account for loops increasing result size...
+      $self->{text_size} += (($self->{text_size} - $old_text_size) * 9);
+      
     } elsif ($type eq 'HTML::Template::COND') {
       # if, unless and else
-
-      # get a label to jump to
-      my $label = $self->_get_label;
       
-      # store label for output
-      $labels{$line->[HTML::Template::COND::JUMP_ADDRESS]} = $label;
+      # store block end loc
+      $blocks{$line->[HTML::Template::COND::JUMP_ADDRESS]}++;
 
       # output conditional
       push(@code, $self->_cond($line->[HTML::Template::COND::JUMP_IF_TRUE], 
 			       $line->[HTML::Template::COND::VARIABLE_TYPE] == HTML::Template::COND::VARIABLE_TYPE_VAR,
 			       $reverse_param_map{$line->[HTML::Template::COND::VARIABLE]},
-			       $label,
-			       $param_map_hv
+			       $offset
 			      ));
 
     } elsif ($type eq 'HTML::Template::NOOP') {
@@ -212,30 +218,29 @@ sub _output_template {
   return @code;
 }
 
-# output a conditional jump to $label
+# output a conditional expression
 sub _cond {
-  my ($self, $is_unless, $is_var, $name, $label, $param_map_hv) = @_;
+  my ($self, $is_unless, $is_var, $name, $offset) = @_;
   my $name_string = _quote_string($name);
-  my $name_len = length($name);
+  my $name_len    = length($name);
   my @code;
-  
-  push @code, "temp_svp = hv_fetch($param_map_hv, \"$name_string\", $name_len, 0);";
+
+  push @code, _find_var($name, $offset, $self->{global_vars});
   
   if ($is_var) {
     if ($is_unless) {
       # unless
-      push(@code, "if (temp_svp && SvTRUE(*temp_svp)) goto $label;");
+      push(@code, "if (!temp_svp || !SvTRUE(*temp_svp)) {");
     } else {
       # if
-      push(@code, "if (!temp_svp || !SvTRUE(*temp_svp)) goto $label;");
+      push(@code, "if (temp_svp && SvTRUE(*temp_svp)) {");
     }
   } else {
     if ($is_unless) {
       # unless
-      push(@code, "if (temp_svp && *temp_svp != &PL_sv_undef && av_len((AV *) SvRV(*temp_svp)) > -1) goto $label;");
-    } else {
-      # if
-      push(@code, "if (!temp_svp || *temp_svp == &PL_sv_undef || av_len((AV *) SvRV(*temp_svp)) == -1) goto $label;");
+      push(@code, "if (!temp_svp || *temp_svp == &PL_sv_undef || av_len((AV *) SvRV(*temp_svp)) == -1) {");
+    } else {      # if
+      push(@code, "if (temp_svp && *temp_svp != &PL_sv_undef && av_len((AV *) SvRV(*temp_svp)) != -1) {");
     }
   }
 
@@ -244,26 +249,53 @@ sub _cond {
 
 # start a loop
 sub _start_loop {
-  my ($self, $name, $param_map_hv, $loop_param_map_hv) = @_;
+  my ($self, $name, $offset, $loop_offset) = @_;
   my $name_string = _quote_string($name);
-  my $name_len = length($name_string);
-  my $av = $self->_get_var("AV *");
-  my $av_len = $self->_get_var("I32");
-  my $counter = $self->_get_var("I32");
+  my $name_len    = length($name_string);
+  my $av          = $self->_get_var("AV *");
+  my $av_len      = $self->_get_var("I32");
+  my $counter     = $self->_get_var("I32");
+  my @code;
 
-  return <<END;
-temp_svp = hv_fetch($param_map_hv, "$name_string", $name_len, 0);
+  my $odd;
+  if ($self->{loop_context_vars}) {
+    $odd = $self->_get_var("I32");
+    push(@code, "$odd = 0;");
+  }
+
+  push @code, <<END;
+temp_svp = hv_fetch(param_map[$offset], "$name_string", $name_len, 0);
 if (temp_svp && (*temp_svp != &PL_sv_undef)) {
-   if (!SvROK(*temp_svp) || SvTYPE($av = (AV *) SvRV(*temp_svp)) != SVt_PVAV)
-      croak("Bad param settings - found non array-ref for loop $name_string!");  
+   $av = (AV *) SvRV(*temp_svp);      
    $av_len = av_len($av);
 
    for($counter = 0; $counter <= $av_len; $counter++) {
-      temp_svp = av_fetch($av, $counter, 0);
-      if (!temp_svp || !SvROK(*temp_svp) || SvTYPE($loop_param_map_hv = (HV *) SvRV(*temp_svp)) != SVt_PVHV)
-        croak("Bad param settings - found non hash-ref for loop row in loop $name_string!");
-
+      param_map[$loop_offset] = (HV *) SvRV(*(av_fetch($av, $counter, 0)));
 END
+
+  if ($self->{loop_context_vars}) {
+    push @code, <<END;
+      if ($counter == 0) {
+	hv_store(param_map[$loop_offset], "__first__", 9, &PL_sv_yes, 0);
+	hv_store(param_map[$loop_offset], "__inner__", 9, &PL_sv_no, 0);
+	if ($av_len == 0) 
+        hv_store(param_map[$loop_offset], "__last__",  8,  &PL_sv_yes, 0);
+      } else if ($counter == $av_len) {
+        hv_store(param_map[$loop_offset], "__first__", 9, &PL_sv_no, 0);
+        hv_store(param_map[$loop_offset], "__inner__", 9, &PL_sv_no, 0);
+        hv_store(param_map[$loop_offset], "__last__",  8,  &PL_sv_yes, 0);
+      } else {
+        hv_store(param_map[$loop_offset], "__first__", 9, &PL_sv_no, 0);
+        hv_store(param_map[$loop_offset], "__inner__", 9, &PL_sv_yes, 0);
+        hv_store(param_map[$loop_offset], "__last__",  8,  &PL_sv_no, 0);
+      }
+
+      hv_store(param_map[$loop_offset], "__odd__", 7, (($odd = !$odd) ? &PL_sv_yes : &PL_sv_no), 0);
+END
+
+  }
+  
+  return @code;
 }
 
 # end a loop
@@ -320,12 +352,6 @@ sub _write_pool {
   return @code;
 }
 
-# get a unique label
-sub _get_label {
-  my $self = shift;
-  return "label_" . $self->{jit_sym}++;
-}
-
 # concatenate a string onto result
 sub _concat_string {
   return "" unless $_[0];
@@ -340,16 +366,29 @@ END
 
 # concatenate a var onto result
 sub _concat_var {
-  my ($name, $hv) = @_;
+  my ($name, $offset, $global) = @_;
+
+  return _find_var($name, $offset, $global), 
+    "if (temp_svp && (*temp_svp != &PL_sv_undef)) sv_catsv(result, *temp_svp);";
+}
+
+# find a variable and put a pointer to it in temp_svp
+sub _find_var {
+  my ($name, $offset, $global) = @_;
   my $string = _quote_string($name);
   my $len = length($name);
 
-  return <<END;
-temp_svp = hv_fetch($hv, "$string", $len, 0);
-if (temp_svp && (*temp_svp != &PL_sv_undef)) sv_catsv(result, *temp_svp);
+  return <<END if $global and $offset;
+for (gcounter = $offset; gcounter >= 0; gcounter--) {
+  temp_svp = hv_fetch(param_map[gcounter], "$string", $len, 0);
+  if (temp_svp && (*temp_svp != &PL_sv_undef)) break;
+}
 END
 
-}
+  return <<END;
+temp_svp = hv_fetch(param_map[$offset], "$string", $len, 0);
+END
+}  
 
 # turn a string into something that C will accept inside
 # double-quotes.  or should I go the array of bytes route?  I think

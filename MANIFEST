@@ -10,10 +10,16 @@ t/02basic.t
 t/03loops.t
 t/04conditionals.t
 t/05error.t
+t/06global.t
 t/jit_path/placeholder
 t/templates/basic.tmpl
 t/templates/cond.tmpl
 t/templates/loop.tmpl
 t/templates/loop2.tmpl
+t/templates/context.tmpl
+t/templates/loopdeloop.tmpl
+t/templates/globals.tmpl
+t/templates/global-loops.tmpl
 ARTISTIC
 GPL
+ANNOUNCE

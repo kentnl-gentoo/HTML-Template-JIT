@@ -4,6 +4,8 @@ use 5.006;
 use strict;
 use warnings;
 
+use Carp qw(croak);
+
 our $VERSION = '0.01';
 
 sub param {
@@ -49,10 +51,41 @@ sub param {
   for (my $x = 0; $x < $#_; $x += 2) {
     my $name = lc $_[$x];
     my $value = $_[($x + 1)];
+
+    next unless $param_hash->{$name};
     
-    # set the value
-    $param_map->{$name} = $value;
+    unless (ref $param_hash->{$name}) {
+      # normal val
+      $param_map->{$name} = $value;
+    } else {
+      # loop val
+      $param_map->{$name} = _massage_loop($value, $param_hash->{$name}, $name);
+    }
   }
+}
+
+sub _massage_loop {
+  my ($array, $hash, $loop_name) = @_;
+
+  croak("Bad param settings - found non array-ref for loop $loop_name!")
+    unless ref $array eq 'ARRAY';
+
+  foreach my $row (@$array) {
+    croak("Bad param settings - found non hash-ref for loop row in loop $loop_name!")
+      unless ref $row eq 'HASH';
+    
+    my $lc_name;
+    foreach my $name (keys %$row) {
+      $lc_name = lc $name;
+      next unless $hash->{$lc_name};
+      unless (ref $hash->{$lc_name}) {
+	$row->{$lc_name} = $row->{$name};
+      } else {
+	$row->{$lc_name} = _massage_loop($row->{$name}, $hash->{$lc_name}, $loop_name);
+      }
+    }
+  }
+  return $array;
 }
 
 sub clear_params {

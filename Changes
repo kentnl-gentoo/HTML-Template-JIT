@@ -1,6 +1,9 @@
-Revision history for Perl extension HTML::Template::JIT.
-
 0.01  Sun Nov 11 18:03:30 2001
-	- original version; created by h2xs 1.21 with options
-		-XAn HTML::Template::JIT
+      - First Version
+
+0.02
+      - Added support for loop_context_vars.
+      - Added support for global_vars.
+      - Fixed bug in loop param handling that made loop variables
+        case-sensitive.
 

@@ -1,0 +1,46 @@
+ANNOUNCEMENT: HTML::Template::JIT 0.02
+
+HTML::Template::JIT - a just-in-time compiler for HTML::Template
+
+CHANGES
+
+- Added support for loop_context_vars.
+
+- Added support for global_vars.
+
+- Fixed bug in loop param handling that made loop variables
+  case-sensitive.
+
+
+DESCRIPTION
+
+This module provides a just-in-time compiler for HTML::Template.
+Templates are compiled into native machine code using Inline::C.  The
+compiled code is then stored to disk and reused on subsequent calls.
+
+HTML::Template::JIT is up to 4 times as fast as HTML::Template using
+caching.
+
+
+NOTE
+
+This module is not feature-complete.  Be sure to read the CAVEATS
+section in the documentation before using!
+
+
+AVAILABILITY
+
+This module is available on SourceForge.  Download it at:
+
+  http://prdownloads.sourceforge.net/html-template/HTML-Template-JIT-0.02.tar.gz
+
+The module is also available on CPAN.  You can get it using CPAN.pm or
+go to:
+
+  http://www.cpan.org/authors/id/S/SA/SAMTREGAR/
+
+
+CONTACT INFO
+
+You can join the HTML::Template mailing-list by sending a blank
+message to htmltmpl-subscribe@lists.vm.com.
