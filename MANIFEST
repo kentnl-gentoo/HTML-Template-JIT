@@ -11,6 +11,10 @@ t/03loops.t
 t/04conditionals.t
 t/05error.t
 t/06global.t
+t/07escaping.t
+t/08print_to_stdout.t
+t/09case.t
+t/10escape.t
 t/jit_path/placeholder
 t/templates/basic.tmpl
 t/templates/cond.tmpl
@@ -20,6 +24,12 @@ t/templates/context.tmpl
 t/templates/loopdeloop.tmpl
 t/templates/globals.tmpl
 t/templates/global-loops.tmpl
+t/templates/chunky.tmpl
+t/templates/case.tmpl
+t/templates/escaping.tmpl
+t/templates/escape.tmpl
+t/templates/urlescape.tmpl
 ARTISTIC
 GPL
 ANNOUNCE
+scripts/benchmark.pl

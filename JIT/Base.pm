@@ -8,14 +8,16 @@ use Carp qw(croak);
 
 our $VERSION = '0.01';
 
+# the param method from HTML::Template ported to ::JIT
 sub param {
   my $pkg = shift;
 
-  my ($param_hash, $param_map);
+  my ($param_hash, $param_map, $case_sensitive);
   {
     no strict 'refs';
     $param_map = \%{$pkg . '::param_map'};
     $param_hash = \%{$pkg . '::param_hash'};
+    $case_sensitive = ${$pkg . '::case_sensitive'};
   }
 
   # the no-parameter case - return list of parameters in the template.
@@ -27,7 +29,7 @@ sub param {
   # the one-parameter case - could be a parameter value request or a
   # hash-ref.
   if (!scalar(@_) and !length($type)) {
-    my $param = lc $first;
+    my $param = $case_sensitive ? $first : lc $first;
     return undef unless (exists($param_hash->{$param}) and
                          defined($param_map->{$param}));
     return $param_map->{$param};
@@ -49,7 +51,7 @@ sub param {
   # loop causes perl 5.004_04 to die with some nonsense about a
   # read-only value.
   for (my $x = 0; $x < $#_; $x += 2) {
-    my $name = lc $_[$x];
+    my $name = $case_sensitive ? $_[$x] : lc $_[$x];
     my $value = $_[($x + 1)];
 
     next unless $param_hash->{$name};
@@ -59,13 +61,14 @@ sub param {
       $param_map->{$name} = $value;
     } else {
       # loop val
-      $param_map->{$name} = _massage_loop($value, $param_hash->{$name}, $name);
+      $param_map->{$name} = _massage_loop($value, $param_hash->{$name}, $name,
+                                          $case_sensitive);
     }
   }
 }
 
 sub _massage_loop {
-  my ($array, $hash, $loop_name) = @_;
+  my ($array, $hash, $loop_name, $case_sensitive) = @_;
 
   croak("Bad param settings - found non array-ref for loop $loop_name!")
     unless ref $array eq 'ARRAY';
@@ -76,12 +79,12 @@ sub _massage_loop {
     
     my $lc_name;
     foreach my $name (keys %$row) {
-      $lc_name = lc $name;
+      $lc_name = $case_sensitive ? $name : lc $name;
       next unless $hash->{$lc_name};
       unless (ref $hash->{$lc_name}) {
 	$row->{$lc_name} = $row->{$name};
       } else {
-	$row->{$lc_name} = _massage_loop($row->{$name}, $hash->{$lc_name}, $loop_name);
+	$row->{$lc_name} = _massage_loop($row->{$name}, $hash->{$lc_name}, $loop_name, $case_sensitive);
       }
     }
   }

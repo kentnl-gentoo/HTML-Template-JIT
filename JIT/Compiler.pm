@@ -29,8 +29,12 @@ sub compile {
   $self->{loop_context_vars} = $args{loop_context_vars};
   $self->{max_depth}         = 0;
   $self->{global_vars}       = $args{global_vars};
+  $self->{print_to_stdout}   = $args{print_to_stdout};
+  $self->{case_sensitive}    = $args{case_sensitive};
 
   # compile internal representation into a chunk of C code
+
+  # get code for param function
   my @code = $self->_output();
 
   if ($self->{jit_debug}) {
@@ -81,7 +85,7 @@ package $self->{package};
 use base 'HTML::Template::JIT::Base';
 
 use Inline C => Config => OPTIMIZE => "$optimize", DIRECTORY => "$self->{package_dir}" $inline_debug;
-use Inline C => <<CODE_END;
+use Inline C => <<'CODE_END';
 
 END
 
@@ -92,7 +96,10 @@ END
   print MODULE "our \%param_hash = (\n", join(',', $self->_param_hash([])), ");\n";
   
   # empty param map
-  print MODULE "our \%param_map;";
+  print MODULE "our \%param_map;\n";
+
+  # note case sensitivity
+  print MODULE "our \$case_sensitive = $self->{case_sensitive};\n";
 
   print MODULE "\n1;\n";
 
@@ -108,37 +115,44 @@ sub _output {
   # construct body of output
   my @code = $self->_output_template($template, 0);
   
-  # setup result size based on gathered stats
-  unshift @code, "SvGROW(result, $self->{text_size});",
-                 "param_map[0] = get_hv(\"$self->{package}::param_map\", 0);";
-  
-  # output pool of variables used in body
-  unshift @code, $self->_write_pool, '';
+  # write global pool
+  unshift @code, '', $self->_write_pool();
 
-  # setup global counter
-  unshift @code, "int gcounter;";
+  # setup result size based on gathered stats with a little extra for variables
+  my $size = int ($self->{text_size} + ($self->{text_size} * .10));
 
-  # start code for output function  
+  # head code for output function, deferred to allow for $size and
+  # max_depth setup
   unshift @code, <<END;
 SV * output(SV *self) { 
-  SV *result = newSVpvn("", 0);
+  SV *result = NEWSV(0, $size);
   HV *param_map[($self->{max_depth} + 1)];
-  SV **temp_svp;
+  SV ** temp_svp;
+  SV * temp_sv;
+  int i;
+  STRLEN len;
+  char c;
+  char buf[4];
+
+  SvPOK_on(result);
+  param_map[0] = get_hv("$self->{package}::param_map", 0);
+
 END
 
   # finish output function
-  push(@code, "return result;", "}");
-  
+  push @code, "return result;", "}";
+
   return @code;
 }
 
-# output the body of a single template
+# output the body of a single scope (top-level or loop)
 sub _output_template {
   my ($self, $template, $offset) = @_;
   $self->{max_depth} = $offset 
     if $offset > $self->{max_depth};
   
-  my @code;
+  my (@code, @top, %vars, @pool, %blocks, $type, $name, $var, 
+      $do_escape);
   
   # setup some convenience aliases ala HTML::Template::output()
   use vars qw($line  @parse_stack  %param_map); 
@@ -147,12 +161,8 @@ sub _output_template {
   *param_map   = $template->{param_map};
   
   my %reverse_param_map = map { $param_map{$_} => $_ } keys %param_map;
-
-  my $type;
   my $parse_stack_length = $#parse_stack;
   
-  my %blocks;
-
   for (my $x = 0; $x <= $parse_stack_length; $x++) {
     *line = \$parse_stack[$x];
     $type = ref($line);
@@ -162,12 +172,40 @@ sub _output_template {
 
     if ($type eq 'SCALAR') {
       # append string and add size to text_size counter
-      push @code, _concat_string($$line);
-      $self->{text_size} += length $$line;
+      if ($self->{print_to_stdout}) {
+        push @code, _print_string($$line);
+      } else {
+        push @code, _concat_string($$line);
+        $self->{text_size} += length $$line;
+      }
 
     } elsif ($type eq 'HTML::Template::VAR') {
+      # get name for this variable from reverse map
+      $name = $reverse_param_map{$line};
+
+      # check var cache - can't use it for escaped variables
+      if (exists $vars{$name}) {
+        $var = $vars{$name};
+      } 
+      
+      # load a new one if needed
+      else {
+        $var = $self->_get_var("SV *", "&PL_sv_undef", \@pool);
+        push @top, _load_var($name, $var, $offset, $self->{global_vars});
+        $vars{$name} = $var;
+      }
+      
+      # escape var if needed
+      if ($do_escape) {
+        push @code, _escape_var($var, $do_escape);
+      }
+
       # append the var
-      push @code, _concat_var($reverse_param_map{$line}, $offset, $self->{global_vars});
+      push @code, ($self->{print_to_stdout} ? _print_var($var,  $do_escape) : 
+                                              _concat_var($var, $do_escape));
+
+      # reset escape flag
+      $do_escape = "";
       
     } elsif ($type eq 'HTML::Template::LOOP') {
       # get loop template
@@ -183,7 +221,7 @@ sub _output_template {
       push @code, $self->_start_loop($reverse_param_map{$line}, $offset, 
 				     $loop_offset);
 
-      # output the loop body
+      # output the loop code
       push @code, $self->_output_template($loop_template, $loop_offset);
       
       # send the loop
@@ -200,13 +238,27 @@ sub _output_template {
       # store block end loc
       $blocks{$line->[HTML::Template::COND::JUMP_ADDRESS]}++;
 
+      # get name for this var
+      $name = $reverse_param_map{$line->[HTML::Template::COND::VARIABLE]};
+
+      # load a new var unless we have this one
+      if (exists $vars{$name}) {
+        $var = $vars{$name};
+      } else {
+        $var = $self->_get_var("SV *", "&PL_sv_undef", \@pool);
+        push @top, _load_var($name, $var, $offset, $self->{global_vars});
+        $vars{$name} = $var;
+      }
+
       # output conditional
       push(@code, $self->_cond($line->[HTML::Template::COND::JUMP_IF_TRUE], 
 			       $line->[HTML::Template::COND::VARIABLE_TYPE] == HTML::Template::COND::VARIABLE_TYPE_VAR,
-			       $reverse_param_map{$line->[HTML::Template::COND::VARIABLE]},
-			       $offset
+                               $var
 			      ));
-
+    } elsif ($type eq 'HTML::Template::ESCAPE') {
+      $do_escape = 'HTML';
+    } elsif ($type eq 'HTML::Template::URLESCAPE') {
+      $do_escape = 'URL';
     } elsif ($type eq 'HTML::Template::NOOP') {
       # noop
     } else {
@@ -214,33 +266,33 @@ sub _output_template {
     }
   }
 
+  # output pool of variables used in body
+  unshift @code, '{', $self->_write_pool(\@pool), @top;
+  push @code, '}';
 
   return @code;
 }
 
 # output a conditional expression
 sub _cond {
-  my ($self, $is_unless, $is_var, $name, $offset) = @_;
-  my $name_string = _quote_string($name);
-  my $name_len    = length($name);
+  my ($self, $is_unless, $is_var, $var) = @_;
   my @code;
 
-  push @code, _find_var($name, $offset, $self->{global_vars});
-  
   if ($is_var) {
     if ($is_unless) {
-      # unless
-      push(@code, "if (!temp_svp || !SvTRUE(*temp_svp)) {");
+      # unless var
+      push(@code, "if (!SvTRUE($var)) {");
     } else {
-      # if
-      push(@code, "if (temp_svp && SvTRUE(*temp_svp)) {");
+      # if var
+      push(@code, "if (SvTRUE($var)) {");
     }
   } else {
     if ($is_unless) {
-      # unless
-      push(@code, "if (!temp_svp || *temp_svp == &PL_sv_undef || av_len((AV *) SvRV(*temp_svp)) == -1) {");
-    } else {      # if
-      push(@code, "if (temp_svp && *temp_svp != &PL_sv_undef && av_len((AV *) SvRV(*temp_svp)) != -1) {");
+      # unless loop
+      push(@code, "if ($var == &PL_sv_undef || av_len((AV *) SvRV($var)) == -1) {");
+    } else {
+      # if loop
+      push(@code, "if ($var != &PL_sv_undef && av_len((AV *) SvRV($var)) != -1) {");
     }
   }
 
@@ -252,14 +304,15 @@ sub _start_loop {
   my ($self, $name, $offset, $loop_offset) = @_;
   my $name_string = _quote_string($name);
   my $name_len    = length($name_string);
-  my $av          = $self->_get_var("AV *");
-  my $av_len      = $self->_get_var("I32");
-  my $counter     = $self->_get_var("I32");
+  my @pool;
+  my $av          = $self->_get_var("AV *", 0, \@pool);
+  my $av_len      = $self->_get_var("I32", 0, \@pool);
+  my $counter     = $self->_get_var("I32", 0, \@pool);
   my @code;
 
   my $odd;
   if ($self->{loop_context_vars}) {
-    $odd = $self->_get_var("I32");
+    $odd = $self->_get_var("I32", 0, \@pool);
     push(@code, "$odd = 0;");
   }
 
@@ -294,13 +347,15 @@ END
 END
 
   }
-  
+
+  unshift @code, "{", $self->_write_pool(\@pool);
+
   return @code;
 }
 
 # end a loop
 sub _end_loop {
-  return '}}';
+  return '}}}';
 }
 
 # construct %param_hash
@@ -331,24 +386,23 @@ sub _param_hash {
 
 # get a fresh var of the requested C type from the pool
 sub _get_var {
-  my ($self, $type) = @_;
-  my $pool = $self->{jit_pool};
+  my ($self, $type, $default, $pool) = @_;
+  $pool = $self->{jit_pool} unless defined $pool;
   my $sym = "sym_" . $self->{jit_sym}++;
-  push @$pool, $type, $sym;
+  push @$pool, $type, ($default ? "$sym = $default" : $sym);
   return $sym;
 }
 
 # write out the code to initialize the pool
 sub _write_pool {
-  my ($self, $type) = @_;
-  my $pool = $self->{jit_pool};
-  
+  my ($self, $pool) = @_;
+  $pool = $self->{jit_pool} unless defined $pool;
   my @code;
-
+  
   for (my $index = 0; $index < @$pool; $index += 2) {
-    push(@code, $pool->[$index] . ' ' . $pool->[$index + 1] . ";");
+      push(@code, $pool->[$index] . ' ' . $pool->[$index + 1] . ";");
   }
-
+  @$pool = ();
   return @code;
 }
 
@@ -358,49 +412,123 @@ sub _concat_string {
   my $len = length($_[0]);
   my $string = _quote_string($_[0]);
 
-  return <<END;
-sv_catpvn(result, "$string", $len);
+  return "sv_catpvn(result, \"$string\", $len);"
+}
+
+# concatenate a string onto result
+sub _print_string {
+  return "" unless $_[0];
+  my $string = _quote_string($_[0]);
+  return "PerlIO_stdoutf(\"$string\");";
+}
+
+# loads a variable into a lexical pool variable
+sub _load_var {
+  my ($name, $var, $offset, $global) = @_;
+  my $string = _quote_string($name);
+  my $len    = length($name);
+  
+  return <<END if $global and $offset;
+for (i = $offset; i >= 0; i--) {
+   if (hv_exists(param_map[i], "$string", $len)) {
+      $var = *(hv_fetch(param_map[i], "$string", $len, 0));
+      if ($var != &PL_sv_undef) break;
+   }
+}
 END
 
+  return <<END;
+if (hv_exists(param_map[$offset], "$string", $len))
+   $var = *(hv_fetch(param_map[$offset], "$string", $len, 0));
+END
+}  
+
+# loads a variable and escapes it
+sub _escape_var {
+  my ($var, $escape) = @_;
+  
+  # apply escaping to a mortal copy in temp_sv
+  my @code = (<<END);
+SvPV_force($var, len);
+temp_sv = sv_mortalcopy($var);
+if (temp_sv != &PL_sv_undef) {
+  len = 0;
+  while (len < SvCUR(temp_sv)) {
+    c = *(SvPVX(temp_sv) + len);
+END
+
+  # perform the appropriate escapes
+  if ($escape eq 'HTML') {
+      push @code, <<END;
+    switch (c) {
+      case '&':
+        sv_insert(temp_sv, len, 1, "&amp;",  5);
+        len += 4;
+        break;
+      case '"':
+        sv_insert(temp_sv, len, 1, "&quot;", 6);
+        len += 5;
+        break;
+      case '>':
+        sv_insert(temp_sv, len, 1, "&gt;",   4);
+        len += 3;
+        break;
+      case '<':
+        sv_insert(temp_sv, len, 1, "&lt;",   4);
+        len += 3;
+        break;
+      case '\\'':
+        sv_insert(temp_sv, len, 1, "&#39;",  5);
+        len += 4;
+        break;
+    }
+END
+  } elsif ($escape eq 'URL') {
+      push @code, <<END;
+    if (!(isALNUM(c) || (c == '-') || (c == '.'))) {
+       sprintf(buf, "%%%02X", c);
+       sv_insert(temp_sv, len, 1, buf, 3);
+       len += 2;
+    }
+END
+      
+  } else {
+    die "Unknown escape type '$escape'.";
+  }
+
+  push @code, <<END;
+    len++;
+  }
+}
+END
+
+  return @code;
 }
 
 # concatenate a var onto result
 sub _concat_var {
-  my ($name, $offset, $global) = @_;
-
-  return _find_var($name, $offset, $global), 
-    "if (temp_svp && (*temp_svp != &PL_sv_undef)) sv_catsv(result, *temp_svp);";
+  $_[0] = "temp_sv" if $_[1];
+  return "if ($_[0] != &PL_sv_undef) sv_catsv(result, $_[0]);";  
 }
 
-# find a variable and put a pointer to it in temp_svp
-sub _find_var {
-  my ($name, $offset, $global) = @_;
-  my $string = _quote_string($name);
-  my $len = length($name);
-
-  return <<END if $global and $offset;
-for (gcounter = $offset; gcounter >= 0; gcounter--) {
-  temp_svp = hv_fetch(param_map[gcounter], "$string", $len, 0);
-  if (temp_svp && (*temp_svp != &PL_sv_undef)) break;
+# print a var to stdout
+sub _print_var {
+  $_[0] = "temp_sv" if $_[1];
+  return "if ($_[0] != &PL_sv_undef) PerlIO_stdoutf(SvPV_nolen($_[0]));";
 }
-END
-
-  return <<END;
-temp_svp = hv_fetch(param_map[$offset], "$string", $len, 0);
-END
-}  
 
 # turn a string into something that C will accept inside
 # double-quotes.  or should I go the array of bytes route?  I think
 # that might be the only way to get UTF-8 working.  It's such hell to
 # debug though...
 sub _quote_string {
-  $_[0] =~ s/\\/\\\\/g;
-  $_[0] =~ s/"/\\\\"/g;
-  $_[0] =~ s/\r/\\\\r/g;
-  $_[0] =~ s/\n/\\\\n/g;
-  $_[0] =~ s/\t/\\\\t/g;
-  return $_[0];
+  my $string = shift;
+  $string    =~ s/\\/\\\\/g;
+  $string    =~ s/"/\\"/g;
+  $string    =~ s/\r/\\r/g;
+  $string    =~ s/\n/\\n/g;
+  $string    =~ s/\t/\\t/g;
+  return $string;
 }  
 
 1;
@@ -410,6 +538,7 @@ __END__
 =pod
 
 =head1 NAME
+
 HTML::Template::JIT::Compiler - Compiler for HTML::Template::JIT
 
 =head1 SYNOPSIS
@@ -443,8 +572,7 @@ or
 
 b) the "Artistic License" which comes with this module.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
+This program is distributed in the hope that it will be useful,but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See either
 the GNU General Public License or the Artistic License for more details.
 

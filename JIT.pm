@@ -4,7 +4,7 @@ use 5.006;
 use strict;
 use warnings;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use Carp qw(croak);
 use File::Spec;
@@ -35,10 +35,18 @@ sub new {
   croak(__PACKAGE__ . "::new() : unable to find template file \"$args{filename}\"")
     unless $path;
 
+  # setup options we care about
+  $args{global_vars}     ||= 0;
+  $args{print_to_stdout} ||= 0;
+  $args{case_sensitive}  ||= 0;
+
   # get a hash of the path and mtime.  hashing them together means
   # that everytime the template file is changed we'll get a new md5
   # and that'll force a recompile.
-  my $path_md5     = md5_hex($path . (stat($path))[9]);
+  my $path_md5     = md5_hex($path . (stat($path))[9] . $VERSION .
+                             join(' ', $args{global_vars},
+                                       $args{print_to_stdout},
+                                       $args{case_sensitive}));
   
   # compute package and filesystem details
   my $package      = "tmpl_$path_md5";      # package name
@@ -54,7 +62,10 @@ sub new {
   # try to load the module and return package handle if successful
   my $result;
   eval { $result = require $package_path; };
-  return $package if $result;
+  if ($result) {
+    $package->clear_params(); # need to clear out params from prior run
+    return $package;
+  }
 
   # die now if we can't compile
   croak(__PACKAGE__ . "::new() : no_compile is on but no compile form for $path is available!")
@@ -160,13 +171,13 @@ but there are some significant differences:
 =item *
 
 The compilation phase takes a long time.  Depending on your system it
-might take several of seconds to compile a large template.
+might take several seconds to compile a large template.
 
 =item *
 
 The resulting compiled template is much faster than a normal cached
 template.  My benchmarks show HTML::Template::JIT, with a precompiled
-template, performing 4 to 8 times faster than HTML::Template with in
+template, performing 4 to 8 times faster than HTML::Template in
 cache mode.
 
 =item *
@@ -188,7 +199,7 @@ new() options.  The new options are:
 
 This is the path that the module will use to store compiled modules.
 It needs to be both readable and writeable.  This directory will
-slowly grow over time as templates are changed are recompiled so you
+slowly grow over time as templates are changed and recompiled so you
 might want to periodically clean it out.  HTML::Template::JIT might
 get better at cleaning-up after itself in a future version.
 
@@ -202,7 +213,21 @@ are never subjected to the lag of a compiler run.
 
 =item jit_debug
 
-Spits out a bunch of obscure debugging on STDERR.
+Spits out a bunch of obscure debugging on STDERR.  Note that you'll
+need to have a working version of the C<indent> utility in your path
+to use this option.  HTML::Template::JIT uses C<indent> to make
+generated C code readable.
+
+=item print_to_stdout
+
+A special version of the HTML::Template print_to option is available
+to print output to stdout rather than accumulating in a variable.  Set
+this option to 1 and output() will print the template contents
+directly to STDOUT.  Defaults to 0.
+
+NOTE: Using print_to_stdout will result in significant memory savings
+for large templates.  However my testing shows a slight slowdown in
+overall performance compared to normal HTML::Template::JIT usage.
 
 =back
 
@@ -212,7 +237,6 @@ This version is rather limited.  It doesn't support the following options:
 
    cache (all modes)
    associate
-   case_sensitive
    print_to
    scalarref (and friends)
    arrayref  (and friends)
@@ -227,6 +251,11 @@ The query() method is not supported.
 
 It's not as fast as it could be - I'd like to see it reach somewhere
 around 10x faster than normal HTML::Template.
+
+I wouldn't expect this module to work with UTF-8 unless your C
+compiler will accept UTF-8 inside C strings.  I think that would be a
+violation of the C standard, so I think I need to do some work here
+instead.
 
 As development progresses I hope to eventually address all of these
 limitations.
