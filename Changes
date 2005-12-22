@@ -43,3 +43,13 @@
 
       - Fixed bug where tmpl_var's with the escape attribute would
         cause a crash if not set with a value.
+
+0.05
+      - Fixed param() to allow for blessed hash-refs. [Alex Kapranoff]
+
+      - Fixed url-escaping to work with UTF-8 characters. [Alex Kapranoff]
+
+      - Added support for JS escaping. [Alex Kapranoff]
+
+      - Fixed a compatibility problem with HTML::Template v2.8, which
+        is now a prerequisite.

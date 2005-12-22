@@ -10,6 +10,6 @@ WriteMakefile(
 			    File::Path     => 0,
 			    Digest::MD5    => 0,
 			    Test::More     => 0,
-                            HTML::Template => 2.5,
+                            HTML::Template => 2.8,
 			   },
 );

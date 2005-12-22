@@ -29,7 +29,9 @@ t/templates/case.tmpl
 t/templates/escaping.tmpl
 t/templates/escape.tmpl
 t/templates/urlescape.tmpl
+t/templates/jsescape.tmpl
 ARTISTIC
 GPL
 ANNOUNCE
 scripts/benchmark.pl
+META.yml                                 Module meta-data (added by MakeMaker)

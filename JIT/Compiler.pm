@@ -131,7 +131,7 @@ SV * output(SV *self) {
   SV * temp_sv;
   int i;
   STRLEN len;
-  char c;
+  unsigned char c;
   char buf[4];
 
   SvPOK_on(result);
@@ -257,12 +257,15 @@ sub _output_template {
       # output conditional
       push(@code, $self->_cond($line->[HTML::Template::COND::JUMP_IF_TRUE], 
 			       $line->[HTML::Template::COND::VARIABLE_TYPE] == HTML::Template::COND::VARIABLE_TYPE_VAR,
-                               $var
+                               $var,
+                               $line->[HTML::Template::COND::UNCONDITIONAL_JUMP], 
 			      ));
     } elsif ($type eq 'HTML::Template::ESCAPE') {
       $do_escape = 'HTML';
     } elsif ($type eq 'HTML::Template::URLESCAPE') {
       $do_escape = 'URL';
+    } elsif ($type eq 'HTML::Template::JSESCAPE') {
+      $do_escape = 'JS';
     } elsif ($type eq 'HTML::Template::NOOP') {
       # noop
     } else {
@@ -279,24 +282,28 @@ sub _output_template {
 
 # output a conditional expression
 sub _cond {
-  my ($self, $is_unless, $is_var, $var) = @_;
+  my ($self, $is_unless, $is_var, $var, $is_uncond) = @_;
   my @code;
 
-  if ($is_var) {
-    if ($is_unless) {
-      # unless var
-      push(@code, "if (!SvTRUE($var)) {");
-    } else {
-      # if var
-      push(@code, "if (SvTRUE($var)) {");
-    }
+  if ($is_uncond) {
+    push(@code, "else {");
   } else {
-    if ($is_unless) {
-      # unless loop
-      push(@code, "if ($var == &PL_sv_undef || av_len((AV *) SvRV($var)) == -1) {");
+    if ($is_var) {
+      if ($is_unless) {
+        # unless var
+        push(@code, "if (!SvTRUE($var)) {");
+      } else {
+        # if var
+        push(@code, "if (SvTRUE($var)) {");
+      }
     } else {
-      # if loop
-      push(@code, "if ($var != &PL_sv_undef && av_len((AV *) SvRV($var)) != -1) {");
+      if ($is_unless) {
+        # unless loop
+        push(@code, "if ($var == &PL_sv_undef || av_len((AV *) SvRV($var)) == -1) {");
+      } else {
+        # if loop
+        push(@code, "if ($var != &PL_sv_undef && av_len((AV *) SvRV($var)) != -1) {");
+      }
     }
   }
 
@@ -494,6 +501,27 @@ END
        sprintf(buf, "%%%02X", c);
        sv_insert(temp_sv, len, 1, buf, 3);
        len += 2;
+    }
+END
+  } elsif ($escape eq 'JS') {
+      push @code, <<'END';
+    switch (c) {
+      case '\\':
+      case '\'':
+      case '"':
+        sprintf(buf, "\\%c", c);
+        sv_insert(temp_sv, len, 1, buf, 2);
+        len += 1;
+        break;
+      case '\n':
+        sprintf(buf, "\\n");
+        sv_insert(temp_sv, len, 1, buf, 2);
+        len += 1;
+        break;
+      case '\r':
+        sprintf(buf, "\\r");
+        sv_insert(temp_sv, len, 1, buf, 2);
+        len += 1;
     }
 END
       
