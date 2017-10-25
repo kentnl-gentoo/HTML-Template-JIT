@@ -63,7 +63,7 @@ sub new {
 
   # try to load the module and return package handle if successful
   my $result;
-  eval { $result = require $package_path; };
+  eval { $result = require File::Spec->rel2abs($package_path); };
   if ($result) {
     $package->clear_params(); # need to clear out params from prior run
     return $package;

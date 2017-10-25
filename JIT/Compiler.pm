@@ -9,6 +9,7 @@ our $VERSION = '0.01';
 use HTML::Template;
 use Carp qw(croak confess);
 use File::Path qw(mkpath rmtree);
+use File::Spec;
 
 sub compile {
   my %args = @_;
@@ -53,7 +54,7 @@ sub compile {
 
   # try to load the module and return package handle if successful
   my $result;
-  eval { $result = require $self->{package_path}; };
+  eval { $result = require File::Spec->rel2abs($self->{package_path}); };
   return 1 if $result;
 
   # don't leave failed compiles lying around unless we're debuging
